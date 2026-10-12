@@ -1,0 +1,25 @@
+{
+  "_ajuda": {
+    "audios": "Lista de arquivos na ordem desejada (ex.: [\"audios/01.mp3\", \"audios/02.mp3\", \"audios/03.mp3\"]). Vazio = os 3 primeiros da pasta_audios em ordem alfabética.",
+    "formatos": "MP3, WAV, OGG, FLAC, OPUS",
+    "dias_semana": "0=segunda ... 6=domingo",
+    "volumes": "0.0 a 1.0 (0.15 = 15%, 0.50 = 50%)",
+    "tolerancia_atraso_seg": "Se o PC estava suspenso e acordou depois do horário, o aviso só toca se o atraso for menor que isso",
+    "edicao": "Alterações neste arquivo valem a partir do próximo horário, sem reiniciar o programa"
+  },
+  "audios": [],
+  "pasta_audios": "audios",
+  "quantidade_audios": 3,
+  "intervalo_minutos": 15,
+  "horario_inicio": "08:00",
+  "horario_fim": "18:00",
+  "dias_semana": [0, 1, 2, 3, 4],
+  "volume_apps_durante_aviso": 0.15,
+  "fade_saida_apps_seg": 4.0,
+  "volume_player": 0.50,
+  "fade_entrada_player_seg": 2.0,
+  "fade_retorno_apps_seg": 3.0,
+  "pausa_entre_audios_seg": 0.3,
+  "tolerancia_atraso_seg": 120,
+  "iniciar_com_windows": true
+}

@@ -1,0 +1,17 @@
+AVISO SONORO - COMO USAR
+========================
+
+O programa já está funcionando. Não precisa fazer nada no dia a dia.
+
+- Ele liga sozinho quando o computador é ligado.
+- De segunda a sexta, das 8h às 18h, a cada 15 minutos, ele abaixa a música
+  ou o vídeo que estiver tocando, toca os avisos e depois volta o som ao normal.
+- O ícone azul com um alto-falante, perto do relógio, mostra que ele está ativo.
+  (Se não aparecer, clique na setinha ^ ao lado do relógio.)
+
+Clique com o botão direito no ícone azul para:
+  - Tocar agora ............ testar o aviso na hora
+  - Pausar avisos .......... parar os avisos por um tempo (clique de novo para voltar)
+  - Sair ................... fechar o programa (ele volta quando o computador religar)
+
+Se algo parecer estranho: desligue e ligue o computador de novo.

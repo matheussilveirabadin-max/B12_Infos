@@ -1,0 +1,6 @@
+pycaw>=20240316
+comtypes>=1.4.0
+psutil>=5.9
+pygame==2.6.1
+pystray==0.19.5
+Pillow>=10.0
