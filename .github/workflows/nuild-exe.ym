@@ -1,0 +1,44 @@
+name: Build AvisoSonoro.exe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+
+      - name: Instalar dependências
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller==6.22.3
+
+      - name: Checar imports
+        run: python -c "import pycaw, pygame, pystray, PIL, psutil, comtypes; import aviso_sonoro"
+
+      - name: Gerar executável
+        run: >
+          pyinstaller --noconfirm --clean --onefile --windowed
+          --name AvisoSonoro
+          --hidden-import pystray._win32
+          --collect-submodules pycaw
+          aviso_sonoro.py
+
+      - name: Montar pacote
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force pacote/AvisoSonoro/audios | Out-Null
+          Copy-Item dist/AvisoSonoro.exe pacote/AvisoSonoro/
+          Copy-Item config.json, LEIA-ME.md, "COMO USAR.txt" pacote/AvisoSonoro/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AvisoSonoro-windows-x64
+          path: pacote/
+
