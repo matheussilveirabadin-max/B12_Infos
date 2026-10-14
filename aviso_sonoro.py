@@ -1,12 +1,14 @@
 """
-AvisoSonoro — toca uma sequência de áudios em intervalos fixos durante o dia.
+AvisoSonoro — toca avisos sonoros em intervalos fixos durante o dia.
 
 Ciclo (padrão a cada 15 min, no horário configurado):
   1. Fade-out de TODOS os apps que tocam som (Chrome, Edge, Firefox, Spotify,
      Teams, etc.) até 15% em 4 s — controle por sessão de áudio do Windows,
      em todos os dispositivos de saída ativos.
   2. Fade-in do player próprio até 50% em 2 s.
-  3. Toca os áudios em sequência, uma única vez cada (sem repetição).
+  3. Toca o(s) áudio(s), uma única vez cada:
+       modo "rodizio"   -> UM áudio por aviso, alternando 1, 2, 3, 1, 2, 3...
+       modo "sequencia" -> todos os áudios em sequência a cada aviso.
   4. Fade-in dos apps de volta ao volume exato que cada um tinha.
 
 Requisitos: Windows 10/11. Dependências: pycaw, comtypes, psutil, pygame, pystray, Pillow.
@@ -32,6 +34,8 @@ EXTENSOES = {".mp3", ".wav", ".ogg", ".flac", ".opus"}
 SESSAO_EXPIRADA = 2  # AudioSessionStateExpired
 
 DEFAULT_CONFIG = {
+    "modo": "rodizio",
+    "rodizio_reinicia_cada_dia": False,
     "audios": [],
     "pasta_audios": "audios",
     "quantidade_audios": 3,
@@ -117,6 +121,22 @@ def carregar_config(anterior: dict | None = None) -> dict:
         return anterior or dict(DEFAULT_CONFIG)
 
 
+def _versao_config() -> tuple | None:
+    """Data de modificação + tamanho do config.json (muda quando o arquivo é salvo)."""
+    try:
+        st = (pasta_base() / "config.json").stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def modo_rodizio(cfg: dict) -> bool:
+    modo = str(cfg.get("modo", "rodizio")).strip().lower()
+    if modo not in ("rodizio", "sequencia"):
+        log.warning('modo "%s" desconhecido; usando "rodizio".', modo)
+    return modo != "sequencia"
+
+
 def resolver_audios(cfg: dict) -> list[Path]:
     base = pasta_base()
     if cfg["audios"]:
@@ -126,7 +146,9 @@ def resolver_audios(cfg: dict) -> list[Path]:
         candidatos = sorted(
             (p for p in pasta.glob("*") if p.suffix.lower() in EXTENSOES),
             key=lambda p: p.name.lower(),
-        )[: int(cfg["quantidade_audios"])]
+        )
+        if not modo_rodizio(cfg):  # no rodízio entram todos os áudios da pasta
+            candidatos = candidatos[: int(cfg["quantidade_audios"])]
     validos = []
     for p in candidatos:
         if not p.is_file():
@@ -136,6 +158,41 @@ def resolver_audios(cfg: dict) -> list[Path]:
         else:
             validos.append(p)
     return validos
+
+
+class Rodizio:
+    """Lembra o último áudio tocado (em disco) para alternar 1, 2, 3, 1... mesmo após reiniciar."""
+
+    def __init__(self, arquivo: Path):
+        self.arquivo = arquivo
+
+    def _ler(self) -> dict:
+        try:
+            return json.loads(self.arquivo.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+
+    def proximo(self, arquivos: list[Path], reinicia_cada_dia: bool = False) -> Path:
+        est = self._ler()
+        ultimo = str(est.get("ultimo") or "").lower()
+        if not ultimo or (reinicia_cada_dia and est.get("data") != dt.date.today().isoformat()):
+            return arquivos[0]
+        nomes = [p.name.lower() for p in arquivos]
+        if ultimo in nomes:
+            return arquivos[(nomes.index(ultimo) + 1) % len(arquivos)]
+        for p in arquivos:  # último foi removido/renomeado: segue a ordem alfabética
+            if p.name.lower() > ultimo:
+                return p
+        return arquivos[0]
+
+    def registrar(self, arquivo: Path) -> None:
+        try:
+            self.arquivo.write_text(
+                json.dumps({"ultimo": arquivo.name, "data": dt.date.today().isoformat()}),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            log.warning("Não foi possível salvar a posição do rodízio: %s", exc)
 
 
 # --------------------------------------------------------------------------- #
@@ -386,6 +443,7 @@ class App:
         self.icone = None
         self.primeira_execucao = False
         self.arquivo_estado = pasta_gravavel() / "estado_volume.json"
+        self.rodizio = Rodizio(pasta_gravavel() / "estado_rodizio.json")
 
     # -- ciclo de aviso ---------------------------------------------------- #
     def executar_ciclo(self, motivo: str = "agendado") -> None:
@@ -393,12 +451,22 @@ class App:
             log.info("Ciclo já em andamento; ignorado.")
             return
         try:
+            self.cfg = carregar_config(self.cfg)  # sempre usa o config.json mais recente
             cfg = self.cfg
             arquivos = resolver_audios(cfg)
             if not arquivos:
                 log.warning("Nenhum áudio válido. Coloque os arquivos em '%s'.", cfg["pasta_audios"])
                 return
-            log.info("Início do aviso (%s): %d áudio(s)", motivo, len(arquivos))
+            if modo_rodizio(cfg):
+                escolhido = self.rodizio.proximo(arquivos, bool(cfg.get("rodizio_reinicia_cada_dia")))
+                pos = arquivos.index(escolhido) + 1
+                arquivos = [escolhido]
+                # avança já aqui: um arquivo com defeito não trava o rodízio no mesmo áudio
+                self.rodizio.registrar(escolhido)
+                log.info("Início do aviso (%s): rodízio, áudio %d de %d — %s",
+                         motivo, pos, len(resolver_audios(cfg)), escolhido.name)
+            else:
+                log.info("Início do aviso (%s): sequência de %d áudio(s)", motivo, len(arquivos))
             ctl = ControleVolumeApps(self.arquivo_estado)
             alvo = float(cfg["volume_apps_durante_aviso"])
             ultimo_tick = [0.0]
@@ -432,21 +500,31 @@ class App:
             ControleVolumeApps(self.arquivo_estado).recuperar_queda()
             ultimo = None
             while not self.parar.is_set():
-                self.cfg = carregar_config(self.cfg)  # edições no config.json valem sem reiniciar
+                self.cfg = carregar_config(self.cfg)
+                versao_cfg = _versao_config()
                 alvo = proximo_horario(dt.datetime.now(), self.cfg, ultimo)
                 self.proximo = alvo
                 self._atualizar_titulo()
                 if alvo is None:
                     log.warning("Nenhum horário/dia válido na configuração.")
-                    self.sinal.wait(3600)
-                    self.sinal.clear()
-                    continue
+                else:
+                    log.info("Próximo aviso: %s", alvo.strftime("%d/%m %H:%M"))
+                config_mudou = False
                 while not self.parar.is_set() and not self.tocar_agora:
-                    falta = (alvo - dt.datetime.now()).total_seconds()
+                    falta = 3600.0 if alvo is None else (alvo - dt.datetime.now()).total_seconds()
                     if falta <= 0:
                         break
-                    self.sinal.wait(min(falta, 20))  # 20 s: tolera suspensão/ajuste de relógio
+                    # 5 s: detecta edição do config.json e tolera suspensão/ajuste de relógio
+                    self.sinal.wait(min(falta, 5))
                     self.sinal.clear()
+                    if _versao_config() != versao_cfg:
+                        log.info("config.json alterado; aplicando nova configuração.")
+                        config_mudou = True
+                        break
+                if config_mudou:
+                    continue
+                if alvo is None and not self.tocar_agora:
+                    continue
                 if self.parar.is_set():
                     break
                 if self.tocar_agora:
@@ -478,7 +556,15 @@ class App:
             return
         txt = "pausado" if self.pausado else (
             f"próximo: {self.proximo:%d/%m %H:%M}" if self.proximo else "sem horário")
-        self.icone.title = f"{APP_NAME} — {txt}"
+        try:
+            if not self.pausado and modo_rodizio(self.cfg):
+                arquivos = resolver_audios(self.cfg)
+                if arquivos:
+                    prox = self.rodizio.proximo(arquivos, bool(self.cfg.get("rodizio_reinicia_cada_dia")))
+                    txt += f" ({prox.stem})"
+        except Exception:
+            pass
+        self.icone.title = f"{APP_NAME} — {txt}"[:120]  # limite do Windows para a dica do ícone
 
 
 def _com_init():
