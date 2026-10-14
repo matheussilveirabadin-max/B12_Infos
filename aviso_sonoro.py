@@ -221,6 +221,18 @@ def proximo_horario(agora: dt.datetime, cfg: dict, ultimo: dt.datetime | None = 
     return None
 
 
+def motivo_sem_horario(cfg: dict) -> str:
+    dias = [int(d) for d in cfg.get("dias_semana", [])]
+    if not dias:
+        return '"dias_semana" está vazio no config.json (use, por exemplo, [0, 1, 2, 3, 4]).'
+    if any(d < 0 or d > 6 for d in dias):
+        return '"dias_semana" só aceita números de 0 (segunda) a 6 (domingo).'
+    if _hm(cfg["horario_fim"]) < _hm(cfg["horario_inicio"]):
+        return (f'"horario_fim" ({cfg["horario_fim"]}) é anterior a '
+                f'"horario_inicio" ({cfg["horario_inicio"]}) no config.json.')
+    return "verifique horario_inicio, horario_fim e dias_semana no config.json."
+
+
 # --------------------------------------------------------------------------- #
 # Volume por aplicativo (Windows Core Audio via pycaw)
 # --------------------------------------------------------------------------- #
@@ -455,7 +467,19 @@ class App:
             cfg = self.cfg
             arquivos = resolver_audios(cfg)
             if not arquivos:
-                log.warning("Nenhum áudio válido. Coloque os arquivos em '%s'.", cfg["pasta_audios"])
+                pasta = pasta_base() / cfg["pasta_audios"]
+                outros = sorted(p.name for p in pasta.glob("*")
+                                if p.is_file() and p.suffix.lower() not in EXTENSOES
+                                and not p.name.upper().startswith("COLOQUE"))
+                if not pasta.is_dir():
+                    msg = f"A pasta '{cfg['pasta_audios']}' não existe ao lado do AvisoSonoro.exe."
+                elif outros:
+                    msg = (f"Formato não suportado: {', '.join(outros[:3])}. "
+                           "Converta para MP3.")
+                else:
+                    msg = f"A pasta '{cfg['pasta_audios']}' está vazia. Coloque os áudios nela."
+                log.warning("Nenhum áudio válido em %s. %s", pasta, msg)
+                self.avisar("AvisoSonoro: nenhum áudio tocado", msg)
                 return
             if modo_rodizio(cfg):
                 escolhido = self.rodizio.proximo(arquivos, bool(cfg.get("rodizio_reinicia_cada_dia")))
@@ -488,10 +512,20 @@ class App:
                 log.info("Fim do aviso: %d áudio(s) tocado(s).", n)
             finally:
                 ctl.restaurar(float(cfg["fade_retorno_apps_seg"]))
-        except Exception:
+        except Exception as exc:
             log.exception("Erro no ciclo de aviso")
+            self.avisar("AvisoSonoro: erro ao tocar", f"{exc} (detalhes em logs\\aviso_sonoro.log)")
         finally:
             self.em_ciclo.release()
+
+    def avisar(self, titulo: str, mensagem: str) -> None:
+        """Balão de notificação do Windows (se o ícone estiver ativo)."""
+        if self.icone is None:
+            return
+        try:
+            self.icone.notify(mensagem[:250], titulo[:60])
+        except Exception:
+            pass
 
     # -- laço do agendador ------------------------------------------------- #
     def laco(self) -> None:
@@ -506,7 +540,9 @@ class App:
                 self.proximo = alvo
                 self._atualizar_titulo()
                 if alvo is None:
-                    log.warning("Nenhum horário/dia válido na configuração.")
+                    motivo = motivo_sem_horario(self.cfg)
+                    log.warning("Nenhum aviso será agendado: %s", motivo)
+                    self.avisar("AvisoSonoro: nenhum horário agendado", motivo)
                 else:
                     log.info("Próximo aviso: %s", alvo.strftime("%d/%m %H:%M"))
                 config_mudou = False
@@ -756,6 +792,15 @@ def main() -> int:
 
     if not instancia_unica():
         log.info("Já existe uma instância em execução; saindo.")
+        try:
+            ctypes.windll.user32.MessageBoxW(
+                None,
+                "O AvisoSonoro já está aberto (ícone azul perto do relógio).\n\n"
+                "Para trocar de versão ou de pasta: clique com o botão direito "
+                "no ícone azul > Sair, e abra este AvisoSonoro.exe de novo.",
+                APP_NAME, 0x40)  # MB_ICONINFORMATION
+        except Exception:
+            pass
         return 0
 
     trabalhador = threading.Thread(target=app.laco, name="agendador", daemon=True)
